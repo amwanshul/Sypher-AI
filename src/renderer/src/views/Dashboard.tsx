@@ -33,6 +33,7 @@ import { VisionMode } from '@renderer/IndexRoot'
 import { sypherService } from '@renderer/services/Sypher-voice-ai'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import EmailAlertCard from '@renderer/components/EmailAlertCard'
 
 interface SypherProps {
   isSystemActive: boolean
@@ -706,6 +707,7 @@ export default function DashboardView({
             onWheel={handleTranscriptWheel}
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain space-y-3 pr-2 scrollbar-small"
           >
+            <EmailAlertCard />
             {transcriptMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-zinc-700 gap-2 opacity-50">
                 <RiHistoryLine size={24} />

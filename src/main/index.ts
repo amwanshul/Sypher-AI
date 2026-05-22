@@ -49,6 +49,9 @@ import registerScreenPeeler from './handlers/ScreenPeeler-handler'
 import registerPhantomKeyboard from './handlers/PhantomControl-handler'
 import registerSecurityVault from './security/Security'
 import registerLockSystem from './security/lock-system'
+import registerEmailWatcherIpc from './ipc/email-watcher.ipc'
+import registerGeminiImageGen from './logic/gemini-image-gen'
+import { startEmailWatcher, stopEmailWatcher } from './services/EmailWatcherService'
 import { autoUpdater } from 'electron-updater'
 
 app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
@@ -112,6 +115,12 @@ function installShortcutGuards(window: BrowserWindow): void {
 
     if (input.code === 'Slash' && input.shift && !input.alt) {
       sendShortcut('show-shortcuts', 'Shortcut menu')
+      return
+    }
+
+    if (input.code === 'KeyL' && input.shift && !input.alt) {
+      sendShortcut('lock-vault', 'Vault locked')
+      return
     }
   })
 }
@@ -275,22 +284,136 @@ app.whenReady().then(() => {
       systemPreferences.askForMediaAccess('camera')
     }
   }
+  // ── Coordinate Picker ──
+  ipcMain.handle('pick-screen-coordinate', async () => {
+    return new Promise((resolve) => {
+      if (mainWindow) mainWindow.minimize()
 
-  ipcMain.handle('secure-save-keys', async (_, { groqKey, geminiKey }) => {
+      // Short delay to let Sypher minimize
+      setTimeout(() => {
+        const { screen: electronScreen } = require('electron')
+        const primaryDisplay = electronScreen.getPrimaryDisplay()
+        const { width, height } = primaryDisplay.size
+
+        const pickerWin = new BrowserWindow({
+          width,
+          height,
+          x: 0,
+          y: 0,
+          transparent: true,
+          frame: false,
+          alwaysOnTop: true,
+          skipTaskbar: true,
+          fullscreen: true,
+          webPreferences: { nodeIntegration: false, contextIsolation: true }
+        })
+
+        pickerWin.setIgnoreMouseEvents(false)
+
+        const pickerHtml = `<!DOCTYPE html>
+<html>
+<head><style>
+  * { margin:0; padding:0; }
+  body {
+    cursor: crosshair;
+    background: rgba(0,0,0,0.15);
+    width: 100vw; height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    font-family: ui-monospace, monospace;
+    user-select: none;
+    overflow: hidden;
+  }
+  .hint {
+    position: fixed; top: 40px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.85); border: 1px solid rgba(16,185,129,0.5);
+    padding: 10px 24px; border-radius: 8px;
+    color: #34d399; font-size: 12px; letter-spacing: 0.15em;
+    text-transform: uppercase; font-weight: 700;
+    box-shadow: 0 0 30px rgba(16,185,129,0.15);
+    pointer-events: none;
+  }
+  .coord {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.85); border: 1px solid rgba(16,185,129,0.3);
+    padding: 8px 20px; border-radius: 6px;
+    color: #a7f3d0; font-size: 11px; letter-spacing: 0.1em;
+    pointer-events: none;
+  }
+  .crosshair-v, .crosshair-h {
+    position: fixed; background: rgba(16,185,129,0.35); pointer-events: none;
+  }
+  .crosshair-v { width: 1px; top: 0; bottom: 0; }
+  .crosshair-h { height: 1px; left: 0; right: 0; }
+</style></head>
+<body>
+  <div class="hint">CLICK ANYWHERE TO CAPTURE COORDINATES · ESC TO CANCEL</div>
+  <div class="coord" id="coord">X: 0  Y: 0</div>
+  <div class="crosshair-v" id="cv"></div>
+  <div class="crosshair-h" id="ch"></div>
+  <script>
+    const cv = document.getElementById('cv');
+    const ch = document.getElementById('ch');
+    const coordEl = document.getElementById('coord');
+    document.addEventListener('mousemove', (e) => {
+      cv.style.left = e.clientX + 'px';
+      ch.style.top = e.clientY + 'px';
+      coordEl.textContent = 'X: ' + e.screenX + '  Y: ' + e.screenY;
+    });
+    document.addEventListener('click', (e) => {
+      document.title = JSON.stringify({ x: e.screenX, y: e.screenY });
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') document.title = 'CANCEL';
+    });
+  </script>
+</body>
+</html>`
+
+        const pickerPath = require('path').join(app.getPath('userData'), '_coord_picker.html')
+        require('fs').writeFileSync(pickerPath, pickerHtml)
+        pickerWin.loadFile(pickerPath)
+
+        pickerWin.webContents.on('page-title-updated', (_e, title) => {
+          pickerWin.close()
+          if (mainWindow) mainWindow.restore()
+
+          if (title === 'CANCEL') {
+            resolve({ cancelled: true })
+          } else {
+            try {
+              const coords = JSON.parse(title)
+              resolve({ cancelled: false, x: coords.x, y: coords.y })
+            } catch {
+              resolve({ cancelled: true })
+            }
+          }
+        })
+
+        pickerWin.on('closed', () => {
+          if (mainWindow && mainWindow.isMinimized()) mainWindow.restore()
+        })
+      }, 400)
+    })
+  })
+
+  ipcMain.handle('secure-save-keys', async (_, { groqKey, geminiKey, hfKey }) => {
     try {
-      let groqEncrypted, geminiEncrypted
+      let groqEncrypted, geminiEncrypted, hfEncrypted
 
       if (safeStorage.isEncryptionAvailable()) {
-        groqEncrypted = safeStorage.encryptString(groqKey).toString('base64')
-        geminiEncrypted = safeStorage.encryptString(geminiKey).toString('base64')
+        groqEncrypted = safeStorage.encryptString(groqKey || '').toString('base64')
+        geminiEncrypted = safeStorage.encryptString(geminiKey || '').toString('base64')
+        hfEncrypted = safeStorage.encryptString(hfKey || '').toString('base64')
       } else {
-        groqEncrypted = Buffer.from(groqKey).toString('base64')
-        geminiEncrypted = Buffer.from(geminiKey).toString('base64')
+        groqEncrypted = Buffer.from(groqKey || '').toString('base64')
+        geminiEncrypted = Buffer.from(geminiKey || '').toString('base64')
+        hfEncrypted = Buffer.from(hfKey || '').toString('base64')
       }
 
       const secureData = {
         groq: groqEncrypted,
-        gemini: geminiEncrypted
+        gemini: geminiEncrypted,
+        hf: hfEncrypted
       }
 
       fs.writeFileSync(secureConfigPath, JSON.stringify(secureData))
@@ -304,17 +427,19 @@ app.whenReady().then(() => {
     if (!fs.existsSync(secureConfigPath)) return null
     try {
       const data = JSON.parse(fs.readFileSync(secureConfigPath, 'utf8'))
-      let groqKey, geminiKey
+      let groqKey = '', geminiKey = '', hfKey = ''
 
       if (safeStorage.isEncryptionAvailable()) {
-        groqKey = safeStorage.decryptString(Buffer.from(data.groq, 'base64'))
-        geminiKey = safeStorage.decryptString(Buffer.from(data.gemini, 'base64'))
+        if (data.groq) groqKey = safeStorage.decryptString(Buffer.from(data.groq, 'base64'))
+        if (data.gemini) geminiKey = safeStorage.decryptString(Buffer.from(data.gemini, 'base64'))
+        if (data.hf) hfKey = safeStorage.decryptString(Buffer.from(data.hf, 'base64'))
       } else {
-        groqKey = Buffer.from(data.groq, 'base64').toString('utf8')
-        geminiKey = Buffer.from(data.gemini, 'base64').toString('utf8')
+        if (data.groq) groqKey = Buffer.from(data.groq, 'base64').toString('utf8')
+        if (data.gemini) geminiKey = Buffer.from(data.gemini, 'base64').toString('utf8')
+        if (data.hf) hfKey = Buffer.from(data.hf, 'base64').toString('utf8')
       }
 
-      return { groqKey, geminiKey }
+      return { groqKey, geminiKey, hfKey }
     } catch (err) {
       return null
     }
@@ -349,6 +474,7 @@ app.whenReady().then(() => {
 
   registerLockSystem()
   registerSecurityVault()
+  registerEmailWatcherIpc()
   registerPhantomKeyboard()
   registerScreenPeeler()
   registerDropZoneControl(ipcMain)
@@ -366,6 +492,7 @@ registerSypherCoder({ ipcMain, app })
   registerLocationHandlers(ipcMain)
   registerGmailHandlers(ipcMain)
   registerGalleryHandlers(ipcMain)
+  registerGeminiImageGen(ipcMain)
   registerterminalControl(ipcMain)
   registerGhostControl(ipcMain)
   registerWebAgent(ipcMain)
@@ -388,6 +515,9 @@ registerSypherCoder({ ipcMain, app })
 
   createWindow()
 
+  // Start ambient email watcher after boot
+  startEmailWatcher()
+
   globalShortcut.register('CommandOrControl+Shift+I', () => toggleOverlayMode())
   ipcMain.on('toggle-overlay', () => toggleOverlayMode())
 
@@ -398,6 +528,7 @@ registerSypherCoder({ ipcMain, app })
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  stopEmailWatcher()
 })
 
 app.on('window-all-closed', () => {

@@ -1,6 +1,8 @@
 export const ingestCodebase = async (dirPath: string): Promise<string> => {
   try {
-    const geminiKey = localStorage.getItem('iris_custom_api_key') || ''
+    // Retrieve key from secure vault
+    const keys = await window.electron.ipcRenderer.invoke('secure-get-keys')
+    const geminiKey = keys?.geminiKey || ''
 
     if (!geminiKey.trim()) {
       throw new Error('Missing Gemini API Key. Please update it in the Command Center Vault.')
@@ -40,8 +42,10 @@ export const ingestCodebase = async (dirPath: string): Promise<string> => {
 
 export const consultOracle = async (query: string): Promise<string> => {
   try {
-    const geminiKey = localStorage.getItem('iris_custom_api_key') || ''
-    const groqKey = localStorage.getItem('iris_groq_api_key') || ''
+    // Retrieve keys from secure vault
+    const keys = await window.electron.ipcRenderer.invoke('secure-get-keys')
+    const geminiKey = keys?.geminiKey || ''
+    const groqKey = keys?.groqKey || ''
 
     if (!geminiKey.trim() || !groqKey.trim()) {
       throw new Error(

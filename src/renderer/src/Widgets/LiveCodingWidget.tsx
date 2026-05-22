@@ -29,7 +29,9 @@ export default function LiveCodingWidget() {
       setIsVisible(true)
       setIsGenerating(true)
 
-      const geminiKey = localStorage.getItem('iris_custom_api_key') || ''
+      // Retrieve key from secure vault
+      const keys = await window.electron.ipcRenderer.invoke('secure-get-keys')
+      const geminiKey = keys?.geminiKey || ''
 
       if (!geminiKey.trim()) {
         setCode(

@@ -5,17 +5,25 @@ export const getMacroSequence = async (macroName: string) => {
 
     if (workflows.length === 0) return { success: false, error: `No macros exist.` }
 
-    const targetClean = macroName
-      .toLowerCase()
-      .replace(/macro|routine|flow|run|execute/g, '')
-      .trim()
-    let macro = workflows.find((w: any) => w.name.toLowerCase().trim() === targetClean)
+    // Try exact match first (case-insensitive)
+    let macro = workflows.find(
+      (w: any) => w.name.toLowerCase().trim() === macroName.toLowerCase().trim()
+    )
 
+    // Fuzzy match: strip common filler words and try partial matching
     if (!macro) {
-      macro = workflows.find(
-        (w: any) =>
-          w.name.toLowerCase().includes(targetClean) || targetClean.includes(w.name.toLowerCase())
-      )
+      const targetClean = macroName
+        .toLowerCase()
+        .replace(/macro|routine|flow|run|execute/g, '')
+        .trim()
+      macro = workflows.find((w: any) => w.name.toLowerCase().trim() === targetClean)
+
+      if (!macro) {
+        macro = workflows.find(
+          (w: any) =>
+            w.name.toLowerCase().includes(targetClean) || targetClean.includes(w.name.toLowerCase())
+        )
+      }
     }
 
     if (!macro) {

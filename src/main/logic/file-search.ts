@@ -158,6 +158,23 @@ const normalizeSearchText = (value: string) =>
 const unique = <T,>(items: T[]) => Array.from(new Set(items))
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+const SEARCH_STOP_TOKENS = new Set([
+  'a',
+  'an',
+  'and',
+  'for',
+  'from',
+  'has',
+  'have',
+  'the',
+  'with',
+  'file',
+  'files',
+  'sample',
+  'generated',
+  'training',
+  'model'
+])
 
 function levenshtein(a: string, b: string) {
   if (a === b) return 0
@@ -193,6 +210,23 @@ function fuzzyRatio(query: string, target: string) {
   const editScore = (1 - distance / Math.max(q.length, t.length)) * 100
 
   return clamp(Math.max(tokenScore, editScore), 0, 100)
+}
+
+function queryCoverage(query: string, target: string) {
+  const tokens = normalizeSearchText(query)
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 2 && !SEARCH_STOP_TOKENS.has(token))
+
+  if (!tokens.length) return 1
+
+  const normalizedTarget = normalizeSearchText(target)
+  const hits = tokens.filter((token) => {
+    const singular = token.endsWith('s') ? token.slice(0, -1) : token
+    return normalizedTarget.includes(token) || normalizedTarget.includes(singular)
+  }).length
+
+  return hits / tokens.length
 }
 
 function inferDaysAgo(text: string): number | null {
@@ -436,7 +470,11 @@ function scoreSmartFile(filePath: string, query: string, content: string, stat: 
   const contentScore = content ? fuzzyRatio(query, content) : 0
   const daysOld = (Date.now() - stat.mtimeMs) / 86400000
   const recencyScore = Math.max(0, (30 - daysOld) / 30) * 20
-  const score = nameScore * 0.6 + contentScore * 0.3 + recencyScore
+  let score = nameScore * 0.6 + contentScore * 0.3 + recencyScore
+  const coverage = queryCoverage(query, `${fileName} ${content}`)
+
+  if (coverage < 0.35) score *= 0.72
+  else if (coverage < 0.5) score *= 0.86
 
   return {
     score,

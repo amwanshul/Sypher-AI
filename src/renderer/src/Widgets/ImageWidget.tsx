@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 
 export default function ImageWidget() {
   const [isVisible, setIsVisible] = useState(false)
@@ -9,11 +9,9 @@ export default function ImageWidget() {
   const [statusText, setStatusText] = useState('')
   const [debugMsg, setDebugMsg] = useState('')
 
-  const abortControllerRef = useRef<AbortController | null>(null)
-
   useEffect(() => {
     const handleEvent = (event: any) => {
-      const { url, prompt, loading, error, errorMessage } = event.detail
+      const { url, prompt, loading, error, errorMessage, savedPath } = event.detail
 
       setPrompt(prompt)
 
@@ -34,51 +32,16 @@ export default function ImageWidget() {
       }
 
       if (url) {
-        downloadAndAutoSave(url, prompt)
+        setImageSrc(url)
+        setLoading(false)
+        setHasError(false)
+        setStatusText(savedPath ? 'SAVED TO GALLERY ✔️' : 'GENERATED ✔️')
       }
     }
 
     window.addEventListener('image-gen', handleEvent)
     return () => window.removeEventListener('image-gen', handleEvent)
   }, [])
-
-  const downloadAndAutoSave = async (url: string, currentPrompt: string) => {
-    if (abortControllerRef.current) abortControllerRef.current.abort()
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-
-    try {
-      setStatusText('DOWNLOADING & SAVING...')
-
-      const response = await fetch(url, { signal: controller.signal })
-      if (!response.ok) throw new Error(`Download Error: ${response.status}`)
-
-      const blob = await response.blob()
-
-      const objectUrl = URL.createObjectURL(blob)
-      setImageSrc(objectUrl)
-      setLoading(false)
-      setHasError(false)
-
-      const reader = new FileReader()
-      reader.readAsDataURL(blob)
-      reader.onloadend = async () => {
-        const base64data = reader.result
-
-        await window.electron.ipcRenderer.invoke('save-image-to-gallery', {
-          title: currentPrompt,
-          base64Data: base64data
-        })
-
-        setStatusText('SAVED TO GALLERY ✔️')
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') return
-      setHasError(true)
-      setDebugMsg('Failed to download/save image.')
-      setLoading(false)
-    }
-  }
 
   if (!isVisible) return null
 

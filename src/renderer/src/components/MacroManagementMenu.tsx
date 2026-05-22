@@ -16,6 +16,7 @@ export default function MacroManagementMenu({ loadMacroToCanvas }: MacroMenuProp
   const [workflows, setWorkflows] = useState<any[]>([])
   const [isMainOpen, setIsMainOpen] = useState(false)
   const [activeWorkflowActions, setActiveWorkflowActions] = useState<string | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const loadWorkflowsList = async () => {
@@ -35,6 +36,7 @@ export default function MacroManagementMenu({ loadMacroToCanvas }: MacroMenuProp
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsMainOpen(false)
         setActiveWorkflowActions(null)
+        setConfirmingDelete(null)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -47,22 +49,16 @@ export default function MacroManagementMenu({ loadMacroToCanvas }: MacroMenuProp
   }
 
   const handleDelete = async (macroName: string) => {
-    if (
-      window.confirm(
-        `Are you sure you want to purge macro "${macroName}" from the neural net? This cannot be undone.`
-      )
-    ) {
-      await (window as any).electron.ipcRenderer.invoke('delete-workflow', { name: macroName })
-      loadWorkflowsList()
-      setActiveWorkflowActions(null)
-    }
+    await (window as any).electron.ipcRenderer.invoke('delete-workflow', { name: macroName })
+    setConfirmingDelete(null)
+    setActiveWorkflowActions(null)
+    loadWorkflowsList()
   }
 
-  const handleDuplicate = async (macro: any) => {
+  const handleDuplicate = (macro: any) => {
     const newMacro = { ...macro, name: `${macro.name} Copy` }
     loadMacroToCanvas(newMacro)
     setIsMainOpen(false)
-    alert(`Duplicated to canvas as '${newMacro.name}'. Change the name and save to finalize.`)
   }
 
   return (
@@ -93,52 +89,80 @@ export default function MacroManagementMenu({ loadMacroToCanvas }: MacroMenuProp
 
           {workflows.map((macro: any) => (
             <div key={macro.name} className="relative group">
-              <button
-                onClick={() => handleEdit(macro)}
-                className="w-full text-left flex flex-col gap-1 p-3 rounded-lg hover:bg-zinc-800/60 group cursor-pointer border border-transparent hover:border-white/5"
-              >
-                <span className="text-xs font-bold text-zinc-100 uppercase tracking-wide group-hover:text-emerald-400">
-                  {macro.name}
-                </span>
-                <span className="text-[9px] text-zinc-600 font-mono italic">
-                  Saved: {new Date(macro.updatedAt).toLocaleString()}
-                </span>
-              </button>
-
-              <button
-                onClick={() =>
-                  setActiveWorkflowActions(activeWorkflowActions === macro.name ? null : macro.name)
-                }
-                className="absolute top-3 right-3 p-1 rounded-md text-zinc-700 hover:text-white hover:bg-zinc-700 group cursor-pointer z-10"
-              >
-                <RiMore2Fill size={16} />
-              </button>
-
-              {activeWorkflowActions === macro.name && (
-                <div className="absolute top-8 right-2 w-32 bg-black border border-[#27272a] rounded-lg shadow-xl z-20 p-1 flex flex-col animate-in scale-95 fade-in duration-100">
-                  {[
-                    { label: 'Edit', icon: <RiEditBoxLine />, action: () => handleEdit(macro) },
-                    {
-                      label: 'Duplicate',
-                      icon: <RiFileCopyLine />,
-                      action: () => handleDuplicate(macro)
-                    },
-                    {
-                      label: 'Purge',
-                      icon: <RiDeleteBinLine />,
-                      className: 'text-red-400 hover:bg-red-950/40',
-                      action: () => handleDelete(macro.name)
-                    }
-                  ].map((btn) => (
+              {/* Inline delete confirmation */}
+              {confirmingDelete === macro.name ? (
+                <div className="flex items-center justify-between p-3 bg-red-950/30 border border-red-500/30 rounded-lg">
+                  <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest">
+                    Purge "{macro.name}"?
+                  </span>
+                  <div className="flex gap-2">
                     <button
-                      key={btn.label}
-                      onClick={btn.action}
-                      className={`flex items-center gap-2 p-2 rounded text-[10px] uppercase font-bold text-zinc-300 hover:bg-zinc-800 transition-colors cursor-pointer ${btn.className}`}
+                      onClick={() => handleDelete(macro.name)}
+                      className="px-3 py-1 bg-red-500 text-white text-[10px] font-bold rounded cursor-pointer hover:bg-red-600 transition-colors"
                     >
-                      {btn.icon} {btn.label}
+                      YES
                     </button>
-                  ))}
+                    <button
+                      onClick={() => setConfirmingDelete(null)}
+                      className="px-3 py-1 bg-zinc-800 text-zinc-300 text-[10px] font-bold rounded cursor-pointer hover:bg-zinc-700 transition-colors"
+                    >
+                      NO
+                    </button>
+                  </div>
                 </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => handleEdit(macro)}
+                    className="w-full text-left flex flex-col gap-1 p-3 rounded-lg hover:bg-zinc-800/60 group cursor-pointer border border-transparent hover:border-white/5"
+                  >
+                    <span className="text-xs font-bold text-zinc-100 uppercase tracking-wide group-hover:text-emerald-400">
+                      {macro.name}
+                    </span>
+                    <span className="text-[9px] text-zinc-600 font-mono italic">
+                      Saved: {new Date(macro.updatedAt).toLocaleString()}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      setActiveWorkflowActions(activeWorkflowActions === macro.name ? null : macro.name)
+                    }
+                    className="absolute top-3 right-3 p-1 rounded-md text-zinc-700 hover:text-white hover:bg-zinc-700 group cursor-pointer z-10"
+                  >
+                    <RiMore2Fill size={16} />
+                  </button>
+
+                  {activeWorkflowActions === macro.name && (
+                    <div className="absolute top-8 right-2 w-32 bg-black border border-[#27272a] rounded-lg shadow-xl z-20 p-1 flex flex-col animate-in scale-95 fade-in duration-100">
+                      {[
+                        { label: 'Edit', icon: <RiEditBoxLine />, action: () => handleEdit(macro) },
+                        {
+                          label: 'Duplicate',
+                          icon: <RiFileCopyLine />,
+                          action: () => handleDuplicate(macro)
+                        },
+                        {
+                          label: 'Purge',
+                          icon: <RiDeleteBinLine />,
+                          className: 'text-red-400 hover:bg-red-950/40',
+                          action: () => {
+                            setConfirmingDelete(macro.name)
+                            setActiveWorkflowActions(null)
+                          }
+                        }
+                      ].map((btn) => (
+                        <button
+                          key={btn.label}
+                          onClick={btn.action}
+                          className={`flex items-center gap-2 p-2 rounded text-[10px] uppercase font-bold text-zinc-300 hover:bg-zinc-800 transition-colors cursor-pointer ${btn.className}`}
+                        >
+                          {btn.icon} {btn.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           ))}

@@ -15,7 +15,19 @@ export default function registerNotesHandlers(ipcMain: IpcMain) {
       const fileName = `${safeTitle}.md`
       const filePath = path.join(NOTES_DIR, fileName)
 
-      const fileContent = `# ${title}\n\n${content}`
+      const timestamp = new Date().toLocaleString('en-US', {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      })
+
+      const fileContent = [
+        `# ${title}`,
+        `> Created: ${timestamp}`,
+        '',
+        '---',
+        '',
+        content
+      ].join('\n')
 
       fs.writeFileSync(filePath, fileContent, 'utf-8')
       return { success: true, path: filePath }

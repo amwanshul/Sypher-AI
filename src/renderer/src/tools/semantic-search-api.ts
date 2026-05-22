@@ -54,6 +54,29 @@ export const runSmartSearch = async (query: string) => {
       })
     )
 
+    if (Array.isArray(payload?.results) && payload.results.length > 0) {
+      const resultLines = payload.results.slice(0, 5).map((file: any, index: number) =>
+        [
+          `${index + 1}. ${file.name}`,
+          `Path: ${file.path}`,
+          `Score: ${file.score}`,
+          `Type: ${file.type}`,
+          file.snippet ? `Snippet: ${file.snippet}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n')
+      )
+
+      const weakWarning =
+        Number(payload.results[0]?.score) < 45
+          ? '\nTop match is weak. Verify the file content before attaching or opening it.'
+          : ''
+
+      return [payload?.speechText || 'Smart file search finished.', weakWarning, ...resultLines]
+        .filter(Boolean)
+        .join('\n\n')
+    }
+
     return payload?.speechText || 'Smart file search finished.'
   } catch (err) {
     window.dispatchEvent(new CustomEvent('semantic-done', { detail: { success: false } }))

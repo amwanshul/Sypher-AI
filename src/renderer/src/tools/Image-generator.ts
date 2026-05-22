@@ -1,4 +1,5 @@
-import { InferenceClient } from '@huggingface/inference'
+// Image generation tool — calls main process IPC to generate via Gemini API.
+// Falls back to HuggingFace FLUX if Gemini key is unavailable.
 
 export const handleImageGeneration = async (prompt: string) => {
   const loadingEvent = new CustomEvent('image-gen', {
@@ -7,53 +8,39 @@ export const handleImageGeneration = async (prompt: string) => {
   window.dispatchEvent(loadingEvent)
 
   try {
-    const HF_API_KEY = localStorage.getItem('iris_hf_api_key') || ''
+    // Use main-process Gemini image generation (secure key access)
+    const result: any = await window.electron.ipcRenderer.invoke('generate-image-gemini', prompt)
 
-    if (!HF_API_KEY.trim()) {
-      throw new Error(
-        'Missing Hugging Face API Key. Please enter it in the Command Center Vault (Settings Tab).'
-      )
+    if (!result.success) {
+      throw new Error(result.error || 'Image generation failed.')
     }
 
-    const client = new InferenceClient(HF_API_KEY)
-
-    const imageBlob: any = await client.textToImage({
-      model: 'black-forest-labs/FLUX.1-schnell',
-      inputs: prompt
-    })
-
-    const imageUrl = URL.createObjectURL(imageBlob)
-
+    // result.filePath is the saved gallery image path
+    // result.url is the file:// URL for display
     const successEvent = new CustomEvent('image-gen', {
       detail: {
-        url: imageUrl,
+        url: result.url,
         prompt: prompt,
         loading: false,
-        error: false
+        error: false,
+        savedPath: result.filePath
       }
     })
     window.dispatchEvent(successEvent)
 
-    return `Visual generated successfully using FLUX.`
+    return `Image generated and saved to Gallery. File path: ${result.filePath}`
   } catch (e: any) {
-
-    let errorMessage = e.message
-
-    if (errorMessage.includes('503') || errorMessage.includes('loading')) {
-      errorMessage = 'Model is warming up (Free Tier). Please try again in 20 seconds.'
-    }
-
     const errorEvent = new CustomEvent('image-gen', {
       detail: {
         url: '',
         prompt: prompt,
         loading: false,
         error: true,
-        errorMessage: errorMessage
+        errorMessage: e.message
       }
     })
     window.dispatchEvent(errorEvent)
 
-    return `Generation failed: ${errorMessage}`
+    return `Generation failed: ${e.message}`
   }
 }

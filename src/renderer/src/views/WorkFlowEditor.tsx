@@ -66,8 +66,13 @@ const CATEGORIZED_TOOLS = {
   ],
   AUTOMATION: [
     {
+      name: 'type_text',
+      description: 'Type text at current cursor position.',
+      parameters: { properties: { text: { type: 'STRING', description: 'Text to type' } } }
+    },
+    {
       name: 'ghost_type',
-      description: 'Type text via keyboard.',
+      description: 'Inject text via keyboard emulation.',
       parameters: { properties: { text: { type: 'STRING' } } }
     },
     {
@@ -299,6 +304,7 @@ function Editor() {
     })
 
     try {
+      console.log('[Macro] Saving workflow:', workflowName, 'Nodes:', sanitizedNodes.length, 'Edges:', edges.length)
       const res = await (window as any).electron.ipcRenderer.invoke('save-workflow', {
         name: workflowName,
         description: description,
@@ -306,25 +312,33 @@ function Editor() {
         edges
       })
       if (res.success) {
+        console.log('[Macro] Save OK')
         setIsSaved(true)
       } else {
+        console.error('[Macro] Save failed:', res.error)
       }
     } catch (err) {
+      console.error('[Macro] Save IPC error:', err)
     }
   }
 
   const runMacroManually = async () => {
+    console.log('[Macro] ▶ RUN clicked — saving first...')
     await saveWorkflow()
 
+    console.log('[Macro] Loading macro sequence for:', workflowName)
     const macroRes = await getMacroSequence(workflowName)
 
     if (!macroRes.success) {
+      console.error('[Macro] Sequence load failed:', macroRes.error)
       alert(`❌ Execution Failed: ${macroRes.error}`)
       return
     }
 
-    for (const step of macroRes.steps) {
+    console.log('[Macro] Executing', macroRes.steps.length, 'steps:', macroRes.steps.map((s: any) => s.tool))
 
+    for (const step of macroRes.steps) {
+      console.log('[Macro] → Executing step:', step.tool, step.args)
       try {
         if (step.tool === 'TRIGGER' || step.tool === 'TRIGGER_VOICE') {
         } else if (step.tool === 'WAIT') {
@@ -369,7 +383,7 @@ function Editor() {
           await scrollScreen(step.args.direction, Number(step.args.amount))
         }
 
-        else if (step.tool === 'ghost_type') {
+        else if (step.tool === 'type_text' || step.tool === 'ghost_type') {
           await (window as any).electron.ipcRenderer.invoke('ghost-sequence', [
             { type: 'type', text: step.args.text }
           ])

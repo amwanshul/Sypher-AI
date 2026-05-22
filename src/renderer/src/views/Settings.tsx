@@ -19,11 +19,9 @@ import {
   RiCloudLine,
   RiCpuLine,
   RiTerminalWindowLine,
-  RiRefreshLine,
-  RiDownloadCloud2Line,
-  RiRocketLine,
   RiEyeLine,
-  RiDeleteBin6Line
+  RiDeleteBin6Line,
+  RiMailLine
 } from 'react-icons/ri'
 
 interface SettingsProps {
@@ -76,6 +74,23 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
   const [updateNotes, setUpdateNotes] = useState('No new updates detected.')
   const [downloadProgress, setDownloadProgress] = useState(0)
 
+  const [emailWatcherEnabled, setEmailWatcherEnabled] = useState(
+    localStorage.getItem('iris_email_watcher') !== 'off'
+  )
+
+  const toggleEmailWatcher = async () => {
+    const next = !emailWatcherEnabled
+    setEmailWatcherEnabled(next)
+    localStorage.setItem('iris_email_watcher', next ? 'on' : 'off')
+    if (window.electron?.ipcRenderer) {
+      if (next) {
+        await window.electron.ipcRenderer.invoke('email-watcher:start')
+      } else {
+        await window.electron.ipcRenderer.invoke('email-watcher:stop')
+      }
+    }
+  }
+
   const loadBiometricIdentities = async () => {
     if (!window.electron?.ipcRenderer) return
     const identities = await window.electron.ipcRenderer.invoke('get-vault-faces')
@@ -98,6 +113,13 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
         .invoke('check-vault-status')
         .then((res) => setFaceCount(res?.faceCount || 0))
       loadBiometricIdentities()
+
+      // Load API keys from secure vault (overrides localStorage defaults)
+      window.electron.ipcRenderer.invoke('secure-get-keys').then((keys) => {
+        if (keys?.geminiKey) setGeminiKey(keys.geminiKey)
+        if (keys?.groqKey) setGroqKey(keys.groqKey)
+        if (keys?.hfKey) setHfKey(keys.hfKey)
+      }).catch(() => {})
 
       window.electron.ipcRenderer.invoke('get-app-version').then((v) => setAppVersion(v))
 
@@ -155,10 +177,15 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
     }
   }
 
+  const [userNameSaved, setUserNameSaved] = useState(false)
+
   const saveUserName = () => {
     localStorage.setItem('iris_user_name', userName)
-    alert('User Designation Saved.')
+    setUserNameSaved(true)
+    setTimeout(() => setUserNameSaved(false), 2000)
   }
+
+  const [keysSaved, setKeysSaved] = useState(false)
 
   const saveApiKeys = async () => {
     localStorage.setItem('iris_custom_api_key', geminiKey)
@@ -168,12 +195,11 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
 
     if (window.electron?.ipcRenderer) {
       try {
-        await window.electron.ipcRenderer.invoke('secure-save-keys', { groqKey, geminiKey })
+        await window.electron.ipcRenderer.invoke('secure-save-keys', { groqKey, geminiKey, hfKey })
       } catch (e) {}
     }
-    alert(
-      'All Neural Uplinks (API Keys) secured locally and in OS Vault. Restart AI modules to apply.'
-    )
+    setKeysSaved(true)
+    setTimeout(() => setKeysSaved(false), 3000)
   }
 
   const currentWordCount = personality
@@ -376,7 +402,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
           </div>
         </div>
 
-        <div className="relative min-h-125 pb-12 mt-2">
+        <div className="mt-2 pb-12">
           <AnimatePresence mode="wait">
             {activeTab === 'updates' && (
               <motion.div
@@ -385,88 +411,34 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
               >
-                <div className={`${cardClass} md:col-span-1 border-emerald-500/20`}>
-                  <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                <div className={`${cardClass} md:col-span-2`}>
+                  <div className="flex justify-between items-end">
                     <span className={titleClass}>
-                      <RiRocketLine className="text-emerald-400" size={18} /> OS Firmware
+                      <RiUserLine className="text-zinc-400" size={18} /> User Designation
                     </span>
-                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded font-mono font-bold tracking-widest">
-                      v{appVersion}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-col gap-4 items-center justify-center flex-1 py-4 text-center">
-                    {updateStatus === 'idle' || updateStatus === 'error' ? (
-                      <>
-                        <RiTerminalWindowLine size={48} className="text-zinc-700" />
-                        <p className="text-xs text-zinc-400 font-mono">Current build is stable.</p>
-                        <button
-                          onClick={checkForUpdates}
-                          className="mt-2 w-full py-3 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-white font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all cursor-pointer"
-                        >
-                          <RiRefreshLine size={16} /> CHECK FOR UPDATES
-                        </button>
-                      </>
-                    ) : updateStatus === 'checking' ? (
-                      <>
-                        <RiRefreshLine size={48} className="text-emerald-500 animate-spin" />
-                        <p className="text-xs text-emerald-400 font-mono animate-pulse">
-                          PINGING NEURAL NETWORK...
-                        </p>
-                      </>
-                    ) : updateStatus === 'available' ? (
-                      <>
-                        <RiDownloadCloud2Line size={48} className="text-cyan-400" />
-                        <p className="text-xs text-cyan-400 font-mono">
-                          NEW BUILD FOUND: v{updateVersion}
-                        </p>
-                        <button
-                          onClick={downloadUpdate}
-                          className="mt-2 w-full py-3 rounded-lg bg-cyan-500/20 hover:bg-cyan-500 text-cyan-400 hover:text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all border border-cyan-500/50 cursor-pointer"
-                        >
-                          <RiDownloadCloud2Line size={16} /> INITIALIZE DOWNLOAD
-                        </button>
-                      </>
-                    ) : updateStatus === 'downloading' ? (
-                      <div className="w-full flex flex-col gap-3">
-                        <div className="flex justify-between text-[10px] font-mono text-zinc-400">
-                          <span>DOWNLOADING PATCH...</span>
-                          <span>{downloadProgress}%</span>
-                        </div>
-                        <div className="w-full h-2 bg-black rounded-full overflow-hidden border border-white/10">
-                          <div
-                            className="h-full bg-cyan-500 shadow-[0_0_10px_#06b6d4] transition-all duration-300"
-                            style={{ width: `${downloadProgress}%` }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <RiRecordCircleLine size={48} className="text-emerald-400 animate-pulse" />
-                        <p className="text-xs text-emerald-400 font-mono">PATCH DOWNLOADED</p>
-                        <button
-                          onClick={installUpdate}
-                          className="mt-2 w-full py-3 rounded-lg bg-emerald-500 text-black font-bold tracking-widest text-[11px] flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)] cursor-pointer"
-                        >
-                          <RiRocketLine size={16} /> EXECUTE RESTART
-                        </button>
-                      </>
+                    {userNameSaved && (
+                      <span className="text-[10px] font-mono tracking-widest text-emerald-400 animate-pulse">
+                        SAVED
+                      </span>
                     )}
                   </div>
-                </div>
-
-                <div className={`${cardClass} md:col-span-1`}>
-                  <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                    <span className={titleClass}>
-                      <RiTerminalWindowLine className="text-zinc-400" size={18} /> Patch Notes
-                    </span>
-                  </div>
-                  <div className="flex-1 bg-[#050505] border border-white/5 rounded-xl p-4 overflow-y-auto max-h-60 scrollbar-small">
-                    <pre className="text-[11px] font-mono text-zinc-400 whitespace-pre-wrap leading-relaxed">
-                      {updateNotes}
-                    </pre>
+                  <div className={inputContainerClass}>
+                    <input
+                      type="text"
+                      value={userName}
+                      onChange={(e) => setUserName(e.target.value)}
+                      placeholder="Enter operator name..."
+                      className="bg-transparent border-none outline-none text-sm text-zinc-100 w-full placeholder:text-zinc-600 font-medium"
+                      onKeyDown={(e) => e.key === 'Enter' && saveUserName()}
+                    />
+                    <button
+                      onClick={saveUserName}
+                      className={`transition-colors ml-2 ${userNameSaved ? 'text-emerald-400' : 'text-zinc-500 hover:text-white'}`}
+                    >
+                      <RiSave3Line size={20} />
+                    </button>
                   </div>
                 </div>
               </motion.div>
@@ -480,7 +452,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 md:grid-cols-2 gap-6 absolute w-full"
+                className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full"
               >
                 <div className={`${cardClass} md:col-span-2`}>
                   <div className="flex justify-between items-center">
@@ -509,27 +481,38 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                   />
                 </div>
 
+
                 <div className={cardClass}>
-                  <div className="flex justify-between items-end">
+                  <div className="flex justify-between items-center">
                     <span className={titleClass}>
-                      <RiUserLine className="text-zinc-400" size={18} /> User Designation
+                      <RiMailLine className="text-cyan-400" size={18} /> Ambient Email Watcher
                     </span>
-                  </div>
-                  <div className={inputContainerClass}>
-                    <input
-                      type="text"
-                      value={userName}
-                      onChange={(e) => setUserName(e.target.value)}
-                      placeholder="Enter operator name..."
-                      className="bg-transparent border-none outline-none text-sm text-zinc-100 w-full placeholder:text-zinc-600 font-medium"
-                    />
                     <button
-                      onClick={saveUserName}
-                      className="text-zinc-500 hover:text-white transition-colors ml-2"
+                      onClick={toggleEmailWatcher}
+                      className={`relative w-12 h-6 rounded-full transition-all duration-300 border cursor-pointer ${
+                        emailWatcherEnabled
+                          ? 'bg-cyan-500/30 border-cyan-500/50'
+                          : 'bg-zinc-900 border-white/10'
+                      }`}
                     >
-                      <RiSave3Line size={20} />
+                      <div
+                        className={`absolute top-0.5 w-5 h-5 rounded-full transition-all duration-300 shadow-md ${
+                          emailWatcherEnabled
+                            ? 'left-6 bg-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.5)]'
+                            : 'left-0.5 bg-zinc-600'
+                        }`}
+                      />
                     </button>
                   </div>
+                  <p className="text-xs text-zinc-500 leading-relaxed">
+                    When enabled, SYPHER will monitor your Gmail inbox every 2 minutes, score emails using AI,
+                    auto-create notes for action items, and surface high-priority alerts on the Dashboard.
+                  </p>
+                  <span className={`text-[10px] font-mono tracking-widest ${
+                    emailWatcherEnabled ? 'text-cyan-400' : 'text-zinc-600'
+                  }`}>
+                    {emailWatcherEnabled ? 'MONITORING ACTIVE' : 'WATCHER OFFLINE'}
+                  </span>
                 </div>
 
                 <div className={`${cardClass} relative`}>
@@ -579,7 +562,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="grid grid-cols-1 gap-6 absolute w-full"
+                className="grid grid-cols-1 gap-6 w-full"
               >
                 <div className={`${cardClass} gap-6`}>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
@@ -588,9 +571,9 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                     </span>
                     <button
                       onClick={saveApiKeys}
-                      className="bg-white text-black px-6 py-2.5 rounded-lg text-xs font-bold tracking-widest hover:bg-zinc-200 transition-colors shadow-[0_0_15px_rgba(255,255,255,0.1)] flex items-center justify-center gap-2 cursor-pointer"
+                      className={`px-6 py-2.5 rounded-lg text-xs font-bold tracking-widest transition-colors shadow-[0_0_15px_rgba(255,255,255,0.1)] flex items-center justify-center gap-2 cursor-pointer ${keysSaved ? 'bg-emerald-500 text-black' : 'bg-white text-black hover:bg-zinc-200'}`}
                     >
-                      <RiSave3Line size={16} /> SAVE ALL KEYS
+                      <RiSave3Line size={16} /> {keysSaved ? 'SECURED ✓' : 'SAVE ALL KEYS'}
                     </button>
                   </div>
 
@@ -676,7 +659,7 @@ const SettingsView = ({ isSystemActive }: SettingsProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5 absolute"
+                className="w-full rounded-3xl overflow-hidden shadow-2xl border border-white/5"
               >
                 <AnimatePresence>
                   {!isSecurityUnlocked && (

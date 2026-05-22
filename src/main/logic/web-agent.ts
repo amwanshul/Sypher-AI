@@ -82,6 +82,7 @@ export default function registerWebAgent(ipcMain: IpcMain) {
     }
   })
 
+  ipcMain.removeHandler('google-search')
   ipcMain.handle('google-search', async (_event, query: string) => {
     let browser: any = null
 

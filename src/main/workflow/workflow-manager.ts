@@ -5,6 +5,7 @@ import fs from 'fs/promises'
 export default function registerWorkflowManager() {
   const WORKFLOWS_FILE = path.join(app.getPath('userData'), 'iris_workflows.json')
 
+  ipcMain.removeHandler('load-workflows')
   ipcMain.handle('load-workflows', async () => {
     try {
       const data = await fs.readFile(WORKFLOWS_FILE, 'utf-8')
@@ -14,6 +15,7 @@ export default function registerWorkflowManager() {
     }
   })
 
+  ipcMain.removeHandler('save-workflow')
   ipcMain.handle('save-workflow', async (_, { name, description, nodes, edges }) => {
     try {
       let workflows: Array<any> = []
@@ -38,6 +40,7 @@ export default function registerWorkflowManager() {
     }
   })
 
+  ipcMain.removeHandler('delete-workflow')
   ipcMain.handle('delete-workflow', async (_, { name }) => {
     try {
       const data = await fs.readFile(WORKFLOWS_FILE, 'utf-8')

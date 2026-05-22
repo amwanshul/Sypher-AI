@@ -120,6 +120,15 @@ const AppRouter = () => {
     return () => electronAPI?.removeAllListeners('oauth-callback')
   }, [navigate])
 
+  // Listen for lock-vault event from IndexRoot
+  useEffect(() => {
+    const handleLockVault = () => {
+      isSessionUnlocked = false
+    }
+    window.addEventListener('lock-vault', handleLockVault)
+    return () => window.removeEventListener('lock-vault', handleLockVault)
+  }, [])
+
   return (
     <Routes>
       <Route

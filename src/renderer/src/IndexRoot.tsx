@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import MiniOverlay from './components/MiniOverlay'
 import { sypherService } from './services/Sypher-voice-ai'
 import { getScreenSourceId } from './hooks/CaptureDesktop'
+import { useNavigate } from 'react-router-dom'
 import Sypher from './UI/Sypher'
 import TerminalOverlay from './components/TerminalOverlay'
 import LeafletMapWidget from './Widgets/MapView'
@@ -22,6 +23,7 @@ export type VisionMode = 'camera' | 'screen' | 'none'
 
 const IndexRoot = () => {
   const [isOverlay, setIsOverlay] = useState(false)
+  const navigate = useNavigate()
 
   const [isSystemActive, setIsSystemActive] = useState(false)
   const [isMicMuted, setIsMicMuted] = useState(true)
@@ -136,8 +138,10 @@ const IndexRoot = () => {
 
       setVisionMode(mode)
       setIsVideoOn(true)
+      sypherService.setVisualFeedMode(mode)
 
       startAIProcessing()
+      requestAnimationFrame(sendCurrentVisionFrame)
 
       stream.getVideoTracks()[0].onended = () => stopVision()
     } catch (e) {
@@ -148,6 +152,7 @@ const IndexRoot = () => {
   const stopVision = () => {
     setIsVideoOn(false)
     setVisionMode('none')
+    sypherService.setVisualFeedMode('none')
 
     if (activeStreamRef.current) {
       activeStreamRef.current.getTracks().forEach((t) => t.stop())
@@ -164,22 +169,32 @@ const IndexRoot = () => {
     }
   }
 
+  const sendCurrentVisionFrame = () => {
+    const vid = processingVideoRef.current
+    if (
+      vid &&
+      vid.readyState >= 2 &&
+      vid.videoWidth > 0 &&
+      vid.videoHeight > 0 &&
+      sypherService.socket?.readyState === WebSocket.OPEN
+    ) {
+      const canvas = document.createElement('canvas')
+      canvas.width = 800
+      canvas.height = 450
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
+        const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1]
+        sypherService.sendVideoFrame(base64)
+      }
+    }
+  }
+
   const startAIProcessing = () => {
     if (aiIntervalRef.current) clearInterval(aiIntervalRef.current)
 
     aiIntervalRef.current = setInterval(() => {
-      const vid = processingVideoRef.current
-      if (vid && vid.readyState === 4 && sypherService.socket?.readyState === WebSocket.OPEN) {
-        const canvas = document.createElement('canvas')
-        canvas.width = 800
-        canvas.height = 450
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-          ctx.drawImage(vid, 0, 0, canvas.width, canvas.height)
-          const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1]
-          sypherService.sendVideoFrame(base64)
-        }
-      }
+      sendCurrentVisionFrame()
     }, 2000)
   }
 
@@ -224,6 +239,22 @@ const IndexRoot = () => {
 
           if (action === 'show-shortcuts') {
             setShowShortcuts((value) => !value)
+            return
+          }
+
+          if (action === 'lock-vault') {
+            // Disconnect AI, navigate to lock screen
+            if (isSystemActive) {
+              sypherService.disconnect()
+              setIsSystemActive(false)
+              setIsMicMuted(true)
+              sypherService.setMute(true)
+              stopVision()
+            }
+            window.dispatchEvent(new Event('lock-vault'))
+            navigate('/lock')
+            showShortcutStatus('Vault locked')
+            return
           }
         } catch (error: any) {
           showShortcutStatus(error?.message || 'Shortcut failed')
@@ -312,6 +343,7 @@ const IndexRoot = () => {
                 ['Ctrl + Shift + A', 'Connect/disconnect AI agent'],
                 ['Ctrl + Shift + T', 'Clear transcript history'],
                 ['Ctrl + Shift + P', 'Clear phone link history'],
+                ['Ctrl + Shift + L', 'Lock vault / lock screen'],
                 ['Ctrl + Shift + /', 'Show/hide this shortcut menu']
               ].map(([keys, label]) => (
                 <div

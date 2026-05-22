@@ -25,7 +25,10 @@ import { consultOracle, ingestCodebase } from '@renderer/tools/rag-oracle-tool'
 import { runDeepResearch } from '@renderer/tools/deepSearch-rag'
 import { runIndexDirectory, runSmartSearch } from '@renderer/tools/semantic-search-api'
 import { closeWidgets, createWidget } from '@renderer/tools/widget-creator'
-import { buildAnimatedWebsite } from '@renderer/code/website-builder-api'
+import {
+  buildAnimatedWebsite,
+  openLastGeneratedWebsiteInVsCode
+} from '@renderer/code/website-builder-api'
 import { getMacroSequence } from '@renderer/code/macro-executor'
 import {
   createFolder,
@@ -62,7 +65,7 @@ import {
   runTerminal
 } from '@renderer/functions/coding-manager-api'
 import { analyzeDirectPhoto, readGalleryImages } from '@renderer/functions/gallery-managet-api'
-import { draftEmail, readEmails, sendEmail } from '@renderer/functions/gmail-manager-api'
+import { draftEmail, readEmails, sendEmail, replyToEmail } from '@renderer/functions/gmail-manager-api'
 import { playSpotifyMusic } from '@renderer/functions/Sporify-manager'
 import { executeSmartDropZones } from '@renderer/functions/DropZone-handler-api'
 import { executeLockSystem } from '@renderer/handlers/LockSystem-handler'
@@ -105,6 +108,10 @@ const SYSTEM_NOTICE_ACK_PATTERN = /^\[System Notice\]\s*updated\.?$/i
 const INTERNAL_CONTEXT_UPDATE_PATTERN = /\bcontext update only\b/i
 const PHONE_COMMAND_PATTERN =
   /\b(on\s+(?:my\s+)?(?:phone|mobile)|(?:phone|mobile)\b.*\b(?:whatsapp|text|message|call|screenshot|screen\s*shot|open|play|pause|next|skip)|send\b.*\bwhatsapp\b|whatsapp\b.*\bsend\b|call\s+[a-z0-9 ._-]+|open\s+.+\s+on\s+(?:my\s+)?phone|play\s+.+\s+on\s+spotify|(?:pause|next|skip)\b.*\b(?:spotify|music))\b/i
+const VISUAL_FEED_COMMAND_PATTERN =
+  /\b(camera|cam|webcam|screen|feed|video|vision|optical|look|see|watch|visible|identify|person|people|face|what'?s happening|what is happening|updates?)\b/i
+
+type VisualFeedMode = 'camera' | 'screen' | 'none'
 
 const isLowValueModelFiller = (text: string): boolean =>
   MODEL_FILLER_PATTERN.test(text.trim()) || SYSTEM_NOTICE_ACK_PATTERN.test(text.trim())
@@ -157,6 +164,8 @@ export class GeminiLiveService {
   private lastAppList: string[] = []
   private suppressContextUpdateResponse: boolean = false
   private contextUpdateSuppressTimer: NodeJS.Timeout | null = null
+  private visualFeedMode: VisualFeedMode = 'none'
+  private lastVideoFrameAt: number = 0
 
   constructor() {
     this.apiKey = ''
@@ -164,6 +173,11 @@ export class GeminiLiveService {
 
   setMute(muted: boolean) {
     this.isMicMuted = muted
+  }
+
+  setVisualFeedMode(mode: VisualFeedMode) {
+    this.visualFeedMode = mode
+    if (mode === 'none') this.lastVideoFrameAt = 0
   }
 
   private stopAllAudio() {
@@ -175,6 +189,27 @@ export class GeminiLiveService {
     })
     this.activeAudioNodes = []
     this.nextStartTime = 0
+  }
+
+  // Play a short confirmation beep instead of spoken "context updated" responses
+  private playBeep(frequency: number = 880, duration: number = 0.08): void {
+    if (!this.audioContext) return
+    try {
+      const oscillator = this.audioContext.createOscillator()
+      const gainNode = this.audioContext.createGain()
+
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime)
+
+      gainNode.gain.setValueAtTime(0.08, this.audioContext.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration)
+
+      oscillator.connect(gainNode)
+      gainNode.connect(this.audioContext.destination)
+
+      oscillator.start(this.audioContext.currentTime)
+      oscillator.stop(this.audioContext.currentTime + duration)
+    } catch {}
   }
 
   async connect(): Promise<void> {
@@ -243,6 +278,7 @@ You are capable of complex, multi-step workflows. If the user gives a complex co
 - **ghost_type:** Use for typing into any active window.
 - **open_folder:** Use this for normal folder opening requests like "open projects folder", "open downloads", or "open games folder". Do not use open_project unless the user explicitly says VS Code, coding project, or open project in code.
 - **read_emails:** Returns Primary Gmail inbox data. Start the response with "Primary Gmail inbox:" and present a compact numbered list with sender, subject, and preview. Do not say "You have X new emails" or "You have X recent emails"; do not call Primary inbox messages "new" unless the tool explicitly says they are unread.
+- **reply_to_email:** When the user wants to reply to an email they just read, use this tool with the email_id from the read_emails result. This automatically resolves the correct recipient address. ALWAYS prefer reply_to_email over send_email when replying to an existing email. If the email asks to send, submit, attach, share, or provide a file, do not reply without a file_path. First use smart_file_search or write_file to find/create the exact requested file, verify the content from the result path/snippet, then pass that absolute path as file_path. If the request asks for a generated sample CSV, create the CSV with the required columns before replying. Never claim a file was attached unless the Gmail tool result confirms "with attachment".
 - **System notices:** If a user turn starts with "[System Notice]" or says "Context update only", silently update context. Do not reply, do not say "Acknowledged", "Noted", "Okay", or similar filler.
 
 ## 🗣️ LANGUAGE PROTOCOLS
@@ -256,6 +292,13 @@ If the user says "Click on [Object]", "Click the button", or "Select that":
 1. You MUST assume you can see the screen.
 2. You MUST analyze the screen (I will send you the frame).
 3. Call the tool \`click_on_screen\` with the visual coordinates of the object.
+
+## LIVE VISUAL FEED PROTOCOL
+- When the dashboard optical feed is active, live camera frames are streamed to you through realtime image input.
+- When screen share is active, live screen frames are streamed to you through realtime image input.
+- For requests like "check the camera feed", "what do you see", "tell me updates", or "look at the screen", answer from the latest streamed visual frame. Do not claim you cannot access the feed when a recent frame is active.
+- If no recent visual frame is active, say the feed is offline and tell the user to turn on the camera/screen feed.
+- You may describe visible people, objects, expressions, posture, activity, and scene changes. Do not identify a person by real name or claim a verified identity from their face unless the user has explicitly provided that label in this session.
 `
 
     const contextPrompt = `
@@ -362,7 +405,7 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                 {
                   name: 'smart_file_search',
                   description:
-                    "ACTION: Smart file search for natural language requests like 'Find the DSP assignment from last week'. It extracts intent, applies fuzzy filename matching, content search, recency filters, and file type filters, then opens a dashboard results panel. Use only for file search/open file requests.",
+                    "ACTION: Smart file search for natural language requests like 'Find the DSP assignment from last week'. It extracts intent, applies fuzzy filename matching, content search, recency filters, and file type filters, then opens a dashboard results panel. The tool response includes absolute file paths, scores, file types, and snippets. Use it before attaching an existing file to email, and avoid weak matches unless the content clearly satisfies the request.",
                   parameters: {
                     type: 'OBJECT',
                     properties: {
@@ -482,19 +525,19 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                 {
                   name: 'save_note',
                   description:
-                    'Save a plan, idea, or code snippet into the system notes. Use this when the user says "Remember this", "Save this plan", or "Create a note".',
+                    'Save a plan, idea, or code snippet into the system notes. Use this when the user says "Remember this", "Save this plan", or "Create a note". Always produce well-formatted, clean Markdown output.',
                   parameters: {
                     type: 'OBJECT',
                     properties: {
                       title: {
                         type: 'STRING',
                         description:
-                          'A short, descriptive title for the note (e.g., "Project_Sypher_Plan").'
+                          'A short, descriptive title for the note (e.g., "Project_Sypher_Plan"). Use Title_Case_With_Underscores.'
                       },
                       content: {
                         type: 'STRING',
                         description:
-                          'The full content of the note in Markdown format. Use headers, bullet points, and code blocks.'
+                          'The full content of the note in well-formatted Markdown. RULES: 1) Start with a brief summary paragraph. 2) Use ## for section headers. 3) Use bullet points (- ) for lists. 4) Use **bold** for emphasis on key terms. 5) Use ``` code blocks for any code. 6) Keep content clean and professional — no filler text, no raw JSON dumps.'
                       }
                     },
                     required: ['title', 'content']
@@ -813,13 +856,14 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                 {
                   name: 'send_email',
                   description:
-                    'Send an email to a specific email address. Only use this if the user explicitly says to SEND it.',
+                    'Send an email to a specific email address. Only use this if the user explicitly says to SEND it. Supports file attachments — pass the absolute file_path to attach a file.',
                   parameters: {
                     type: 'OBJECT',
                     properties: {
                       to: { type: 'STRING', description: 'The recipient email address.' },
                       subject: { type: 'STRING', description: 'The subject of the email.' },
-                      body: { type: 'STRING', description: 'The main message content.' }
+                      body: { type: 'STRING', description: 'The main message content.' },
+                      file_path: { type: 'STRING', description: 'Optional. Absolute path to a file to attach (e.g., an image, PDF, document).' }
                     },
                     required: ['to', 'subject', 'body']
                   }
@@ -836,6 +880,20 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                       body: { type: 'STRING', description: 'The main message content.' }
                     },
                     required: ['to', 'subject', 'body']
+                  }
+                },
+                {
+                  name: 'reply_to_email',
+                  description:
+                    'Reply to an email that was previously read using read_emails. This automatically resolves the correct recipient from the original email. ALWAYS use this instead of send_email when replying to an existing email. The email_id is provided in the read_emails result. Supports file attachments. If the original email requested a file, file_path is required unless you first create the requested file with write_file.',
+                  parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                      email_id: { type: 'STRING', description: 'The email ID from the read_emails result.' },
+                      body: { type: 'STRING', description: 'The reply message content.' },
+                      file_path: { type: 'STRING', description: 'Optional only when no file was requested. Absolute path to the verified file to attach.' }
+                    },
+                    required: ['email_id', 'body']
                   }
                 },
                 {
@@ -1091,7 +1149,7 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                 {
                   name: 'open_in_vscode',
                   description:
-                    "Opens the currently active file or project in Visual Studio Code. Use this when the user says 'open it in vscode'."
+                    "Opens the most recently generated website or currently active generated file in Visual Studio Code. Use this when the user says 'open generated code', 'open the web UI in VS Code', or 'open it in vscode'."
                 },
                 {
                   name: 'teleport_windows',
@@ -1468,9 +1526,11 @@ ${JSON.stringify(sanitizePromptHistory(history))}
               } else if (call.name === 'read_emails') {
                 result = await readEmails(call.args.max_results || 5)
               } else if (call.name === 'send_email') {
-                result = await sendEmail(call.args.to, call.args.subject, call.args.body)
+                result = await sendEmail(call.args.to, call.args.subject, call.args.body, call.args.file_path)
               } else if (call.name === 'draft_email') {
                 result = await draftEmail(call.args.to, call.args.subject, call.args.body)
+              } else if (call.name === 'reply_to_email') {
+                result = await replyToEmail(call.args.email_id, call.args.body, call.args.file_path)
               } else if (call.name === 'get_weather') {
                 result = await fetchWeather(call.args.location)
               } else if (call.name === 'get_stock_price') {
@@ -1511,8 +1571,13 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                 )
                 result = `✅ I am streaming the code for ${call.args.file_name} to the screen now.`
               } else if (call.name === 'open_in_vscode') {
-                window.dispatchEvent(new CustomEvent('ai-open-vscode'))
-                result = '✅ Opening Visual Studio Code.'
+                const websiteResult = await openLastGeneratedWebsiteInVsCode()
+                if (websiteResult.success) {
+                  result = websiteResult.message
+                } else {
+                  window.dispatchEvent(new CustomEvent('ai-open-vscode'))
+                  result = `${websiteResult.message} If a live generated code file is open, I sent it to VS Code.`
+                }
               } else if (call.name === 'teleport_windows') {
                 await window.electron.ipcRenderer.invoke('teleport-windows', call.args.commands)
                 result = '✅ I have restructured the desktop windows, Boss.'
@@ -1578,9 +1643,11 @@ ${JSON.stringify(sanitizePromptHistory(history))}
                       } else if (step.tool === 'ghost_type') {
                         await ghostType(step.args.text)
                       } else if (step.tool === 'send_email') {
-                        await sendEmail(step.args.to, step.args.subject, step.args.body)
+                        await sendEmail(step.args.to, step.args.subject, step.args.body, step.args.file_path)
                       } else if (step.tool === 'draft_email') {
                         await draftEmail(step.args.to, step.args.subject, step.args.body)
+                      } else if (step.tool === 'reply_to_email') {
+                        await replyToEmail(step.args.email_id, step.args.body, step.args.file_path)
                       } else if (step.tool === 'open_email') {
                         await openEmailInbox()
                       } else if (step.tool === 'read_emails') {
@@ -1645,7 +1712,29 @@ ${JSON.stringify(sanitizePromptHistory(history))}
           }
 
           if (serverContent.outputTranscription?.text && !this.suppressContextUpdateResponse) {
-            this.aiResponseBuffer += serverContent.outputTranscription.text
+            const incomingText = serverContent.outputTranscription.text
+            this.aiResponseBuffer += incomingText
+
+            // Detect context-ack responses leaking through and replace with beep
+            const bufferSoFar = this.aiResponseBuffer.trim().toLowerCase()
+            const CONTEXT_ACK_PATTERNS = [
+              'context updated', 'system context updated', 'context acknowledged',
+              'noted. context updated', 'acknowledged.', 'context update acknowledged',
+              'system notice acknowledged', 'understood. context updated',
+              'got it. context updated', 'system updated'
+            ]
+            if (CONTEXT_ACK_PATTERNS.some(p => bufferSoFar.includes(p)) || /^\[system notice\].*updated\.?$/i.test(bufferSoFar)) {
+              // Kill any audio that leaked through and play a beep instead
+              this.stopAllAudio()
+              this.playBeep()
+              this.aiResponseBuffer = ''
+              this.suppressContextUpdateResponse = true
+              if (this.contextUpdateSuppressTimer) clearTimeout(this.contextUpdateSuppressTimer)
+              this.contextUpdateSuppressTimer = setTimeout(() => {
+                this.suppressContextUpdateResponse = false
+                this.contextUpdateSuppressTimer = null
+              }, 3000)
+            }
           }
 
           if (serverContent.inputTranscription?.text) {
@@ -1832,11 +1921,29 @@ ${JSON.stringify(sanitizePromptHistory(history))}
 
   sendVideoFrame(base64Image: string): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
+    this.lastVideoFrameAt = Date.now()
     this.socket.send(
       JSON.stringify({
         realtimeInput: { mediaChunks: [{ mimeType: 'image/jpeg', data: base64Image }] }
       })
     )
+  }
+
+  private shouldAttachVisualContext(text: string): boolean {
+    return VISUAL_FEED_COMMAND_PATTERN.test(text)
+  }
+
+  private buildPromptWithVisualContext(text: string): string {
+    if (!this.shouldAttachVisualContext(text)) return text
+
+    const hasRecentFrame = this.visualFeedMode !== 'none' && Date.now() - this.lastVideoFrameAt < 8000
+
+    if (!hasRecentFrame) {
+      return `Visual context: No recent live visual frame is available. If the user is asking about camera, screen, or the current view, tell them to enable the optical feed or screen share first.\n\nUser request: ${text}`
+    }
+
+    const feedLabel = this.visualFeedMode === 'camera' ? 'camera/optical feed' : 'screen share feed'
+    return `Visual context: A recent live ${feedLabel} frame is available in realtime image input. Use the latest streamed frame to answer the user's visual request. Describe visible scene details and updates directly. Do not identify a person by real name from their face.\n\nUser request: ${text}`
   }
 
   async sendTextPrompt(prompt: string): Promise<{ ok: boolean; error?: string }> {
@@ -1864,10 +1971,11 @@ ${JSON.stringify(sanitizePromptHistory(history))}
     await saveMessage('user', text)
     this.aiResponseBuffer = ''
     this.userInputBuffer = ''
+    const outboundText = this.buildPromptWithVisualContext(text)
     this.socket.send(
       JSON.stringify({
         clientContent: {
-          turns: [{ role: 'user', parts: [{ text }] }],
+          turns: [{ role: 'user', parts: [{ text: outboundText }] }],
           turnComplete: true
         }
       })
